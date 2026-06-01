@@ -342,6 +342,20 @@
             }
         });
 
+        async function loadHistory() {
+            try {
+                const res = await fetch('/history');
+                const messages = await res.json();
+                if (messages.length > 0 && welcome) welcome.remove();
+                for (const m of messages) {
+                    appendMessage(m.role, m.text);
+                }
+            } catch (err) {
+                // No history available; start fresh.
+            }
+        }
+
+        loadHistory();
         input.focus();
     </script>
 </body>

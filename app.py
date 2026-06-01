@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, session
+from flask import Flask, render_template, request, session, jsonify
 from dotenv import load_dotenv
 import os
 import uuid
@@ -16,6 +16,7 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 
 app = Flask(__name__)
 load_dotenv()
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key")
 
 PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -89,6 +90,18 @@ rag_with_history = RunnableWithMessageHistory(
 @app.route("/")
 def index():
     return render_template("chat.html")
+
+@app.route("/history")
+def history():
+    session_id = session.get("session_id")
+    if not session_id or session_id not in store:
+        return jsonify([])
+
+    messages = []
+    for m in store[session_id].messages:
+        role = "user" if m.type == "human" else "bot"
+        messages.append({"role": role, "text": m.content})
+    return jsonify(messages)
 
 @app.route("/get", methods=["POST"])
 def chat():
