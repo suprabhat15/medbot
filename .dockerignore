@@ -1,0 +1,29 @@
+# Version control & CI
+.git
+.gitignore
+.github
+
+# Secrets (provided at runtime via -e, never baked into the image)
+.env
+
+# Python caches / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Local virtual environments
+venv/
+.venv/
+env/
+
+# Data & notebooks not needed to serve the app (used only for indexing)
+pdf/
+research/
+
+# Misc
+*.md
+image.png
+.DS_Store
