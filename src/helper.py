@@ -1,5 +1,4 @@
 from typing import List
-# from langchain_core.documents import Document
 from langchain.schema import Document
 from langchain_community.document_loaders import PyPDFLoader, DirectoryLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
