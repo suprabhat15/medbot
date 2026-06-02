@@ -46,20 +46,34 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Fetch ECR login password
+        id: ecr-password
+        run: |
+          echo "::add-mask::$(aws ecr get-login-password --region "${{ secrets.AWS_REGION }}")"
+          echo "password=$(aws ecr get-login-password --region "${{ secrets.AWS_REGION }}")" >> "$GITHUB_OUTPUT"
+
       - name: Deploy container over SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: IMAGE,AWS_REGION,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,PINECONE_API_KEY,OPENAI_API_KEY,FLASK_SECRET_KEY
+          envs: IMAGE,ECR_PASSWORD,PINECONE_API_KEY,OPENAI_API_KEY,FLASK_SECRET_KEY
           script: |
             set -e
 
-            # Authenticate the Docker daemon on the EC2 host to ECR
+            # Authenticate the Docker daemon on the EC2 host to ECR.
+            # The login token is fetched on the runner, so the AWS CLI is
+            # not required on the EC2 host.
             REGISTRY=$(echo "$IMAGE" | cut -d'/' -f1)
-            aws ecr get-login-password --region "$AWS_REGION" \
-              | docker login --username AWS --password-stdin "$REGISTRY"
+            echo "$ECR_PASSWORD" | docker login --username AWS --password-stdin "$REGISTRY"
 
             # Pull the freshly built image
             docker pull "$IMAGE"
@@ -81,9 +95,7 @@ jobs:
             docker image prune -f
         env:
           IMAGE: ${{ needs.build-and-push.outputs.image }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          ECR_PASSWORD: ${{ steps.ecr-password.outputs.password }}
           PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           FLASK_SECRET_KEY: ${{ secrets.FLASK_SECRET_KEY }}
