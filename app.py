@@ -16,7 +16,7 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 
 app = Flask(__name__)
 load_dotenv()
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key")
+app.secret_key = os.environ["FLASK_SECRET_KEY"]
 
 PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -120,4 +120,6 @@ def chat():
     return str(result["answer"])
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8081, debug=True)
+    port = int(os.environ.get("PORT", 8081))
+    debug = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
+    app.run(host="0.0.0.0", port=port, debug=debug)
