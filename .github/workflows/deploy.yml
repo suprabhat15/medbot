@@ -44,52 +44,40 @@ jobs:
   deploy:
     name: Deploy to EC2
     needs: build-and-push
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
-      - name: Deploy container over SSH
-        uses: appleboy/ssh-action@v1.2.0
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          envs: IMAGE,AWS_REGION,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,PINECONE_API_KEY,OPENAI_API_KEY,FLASK_SECRET_KEY
-          script: |
-            set -e
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-            # Authenticate the Docker daemon on the EC2 host to ECR.
-            # The AWS CLI is not installed on the host, so mint the ECR token
-            # with the official aws-cli container (Docker is already present).
-            REGISTRY=$(echo "$IMAGE" | cut -d'/' -f1)
-            docker run --rm \
-              -e AWS_ACCESS_KEY_ID \
-              -e AWS_SECRET_ACCESS_KEY \
-              -e AWS_REGION \
-              amazon/aws-cli ecr get-login-password --region "$AWS_REGION" \
-              | docker login --username AWS --password-stdin "$REGISTRY"
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
 
-            # Pull the freshly built image
-            docker pull "$IMAGE"
-
-            # Replace the running container
-            docker stop medbot || true
-            docker rm medbot || true
-            docker run -d \
-              --name medbot \
-              --restart unless-stopped \
-              -p 80:8080 \
-              -e PORT=8080 \
-              -e PINECONE_API_KEY="$PINECONE_API_KEY" \
-              -e OPENAI_API_KEY="$OPENAI_API_KEY" \
-              -e FLASK_SECRET_KEY="$FLASK_SECRET_KEY" \
-              "$IMAGE"
-
-            # Reclaim disk from old images
-            docker image prune -f
+      - name: Deploy container
         env:
           IMAGE: ${{ needs.build-and-push.outputs.image }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          FLASK_SECRET_KEY: ${{ secrets.FLASK_SECRET_KEY }}
+        run: |
+          set -e
+
+          # Host Docker is already logged in to ECR by the step above.
+          # Pull the immutable, SHA-tagged image to guarantee a fresh deploy.
+          docker pull "$IMAGE"
+
+          # Replace the running container
+          docker stop medbot || true
+          docker rm medbot || true
+          docker run -d \
+            --name medbot \
+            --restart unless-stopped \
+            -p 80:8080 \
+            -e PORT=8080 \
+            -e PINECONE_API_KEY="${{ secrets.PINECONE_API_KEY }}" \
+            -e OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
+            -e FLASK_SECRET_KEY="${{ secrets.FLASK_SECRET_KEY }}" \
+            "$IMAGE"
+
+          # Reclaim disk from old images
+          docker image prune -f
