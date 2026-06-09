@@ -12,6 +12,10 @@ def fetch_text_from_PDFs(data: str):
     )
     return loader.load()
 
+def fetch_text_from_PDF_file(file_path: str) -> List[Document]:
+    loader = PyPDFLoader(file_path)
+    return loader.load()
+
 def keep_source_metadata(docs: List[Document]) -> List[Document]:
     return [
         Document(

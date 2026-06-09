@@ -2,8 +2,16 @@ from flask import Flask, render_template, request, session, jsonify
 from dotenv import load_dotenv
 import os
 import uuid
+import tempfile
 
-from src.helper import fetch_embeddings_HF
+from werkzeug.utils import secure_filename
+
+from src.helper import (
+    fetch_embeddings_HF,
+    fetch_text_from_PDF_file,
+    keep_source_metadata,
+    create_chunks,
+)
 from src.prompt import system_prompt
 
 from langchain_pinecone import PineconeVectorStore
@@ -13,10 +21,14 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_core.runnables import ConfigurableField
 
 app = Flask(__name__)
 load_dotenv()
 app.secret_key = os.environ["FLASK_SECRET_KEY"]
+
+# Reject uploads larger than 35 MB before they reach the handler.
+app.config["MAX_CONTENT_LENGTH"] = 35 * 1024 * 1024
 
 PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -32,9 +44,14 @@ docsearch = PineconeVectorStore.from_existing_index(
     embedding=embeddings
 )
 
+# search_kwargs is exposed as a configurable field so each request can scope
+# retrieval to a Pinecone namespace (the shared corpus by default, or the
+# session's own namespace once the user has uploaded a PDF).
 retriever = docsearch.as_retriever(
     search_type="similarity",
     search_kwargs={"k": 3}
+).configurable_fields(
+    search_kwargs=ConfigurableField(id="retriever_search_kwargs")
 )
 
 chat_model = ChatOpenAI(model="gpt-4o", temperature=0)
@@ -112,12 +129,78 @@ def chat():
     if "session_id" not in session:
         session["session_id"] = str(uuid.uuid4())
 
+    # Once the user has uploaded a PDF, answer from their document's namespace;
+    # otherwise fall back to the shared medical corpus (default namespace).
+    namespace = session["session_id"] if session.get("has_upload") else ""
+
     result = rag_with_history.invoke(
         {"input": msg},
-        config={"configurable": {"session_id": session["session_id"]}}
+        config={"configurable": {
+            "session_id": session["session_id"],
+            "retriever_search_kwargs": {"k": 3, "namespace": namespace},
+        }}
     )
 
     return str(result["answer"])
+
+@app.route("/upload", methods=["POST"])
+def upload():
+    if "session_id" not in session:
+        session["session_id"] = str(uuid.uuid4())
+
+    file = request.files.get("file")
+    if file is None or file.filename == "":
+        return jsonify({"error": "No file provided."}), 400
+
+    filename = secure_filename(file.filename)
+    if not filename.lower().endswith(".pdf"):
+        return jsonify({"error": "Only PDF files are supported."}), 400
+
+    namespace = session["session_id"]
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            file.save(tmp.name)
+            tmp_path = tmp.name
+
+        docs = fetch_text_from_PDF_file(tmp_path)
+        if not docs:
+            return jsonify({"error": "Could not extract any text from this PDF."}), 400
+
+        # Keep the original filename as the source so answers can cite it.
+        for doc in docs:
+            doc.metadata["source"] = filename
+
+        relevant_docs = keep_source_metadata(docs)
+        chunks = create_chunks(relevant_docs)
+
+        batch_size = 50
+        for i in range(0, len(chunks), batch_size):
+            PineconeVectorStore.from_documents(
+                documents=chunks[i:i + batch_size],
+                index_name=index_name,
+                embedding=embeddings,
+                namespace=namespace,
+            )
+
+        session["has_upload"] = True
+
+        return jsonify({
+            "status": "ok",
+            "filename": filename,
+            "chunks": len(chunks),
+        })
+    except Exception:
+        app.logger.exception("PDF upload failed")
+        return jsonify({"error": "Failed to process the PDF. Please try again."}), 500
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+@app.errorhandler(413)
+def too_large(_):
+    return jsonify({"error": "File is too large. Maximum size is 35 MB."}), 413
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8081))
